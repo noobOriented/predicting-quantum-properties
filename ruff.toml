@@ -1,7 +1,7 @@
 line-length = 119
 
 [lint]
-select = ["E", "F", "N", "S"]
+select = ["E", "F", "I", "C", "N", "S"]
 
 [lint.per-file-ignores]
 "*test*.py" = ["S101"]
