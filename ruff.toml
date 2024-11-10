@@ -8,3 +8,6 @@ select = ["E", "F", "I", "C", "N", "S"]
 
 [lint.flake8-quotes]
 inline-quotes = "single"
+
+[lint.isort]
+lines-after-imports = 2

@@ -5,9 +5,10 @@
 # This Python version is slower than the C++ version. (there are less code optimization)
 # But it should be easier to understand and build upon.
 #
-import sys
-import random
 import math
+import random
+import sys
+
 
 def randomized_classical_shadow(num_total_measurements, system_size):
     #
@@ -18,7 +19,7 @@ def randomized_classical_shadow(num_total_measurements, system_size):
     #
     measurement_procedure = []
     for t in range(num_total_measurements):
-        single_round_measurement = [random.choice(["X", "Y", "Z"]) for i in range(system_size)]
+        single_round_measurement = [random.choice(['X', 'Y', 'Z']) for i in range(system_size)]
         measurement_procedure.append(single_round_measurement)
     return measurement_procedure
 
@@ -89,9 +90,9 @@ def derandomized_classical_shadow(all_observables, num_of_measurements_per_obser
         sum_cnt = 0
 
         for qubit_i in range(system_size):
-            cost_of_outcomes = dict([("X", 0), ("Y", 0), ("Z", 0)])
+            cost_of_outcomes = dict([('X', 0), ('Y', 0), ('Z', 0)])
 
-            for dice_roll_pauli in ["X", "Y", "Z"]:
+            for dice_roll_pauli in ['X', 'Y', 'Z']:
                 # Assume the dice rollout to be "dice_roll_pauli"
                 for i, single_observable in enumerate(all_observables):
                     result = match_up(qubit_i, dice_roll_pauli, single_observable)
@@ -110,7 +111,7 @@ def derandomized_classical_shadow(all_observables, num_of_measurements_per_obser
                     if result == 1:
                         num_of_matches_needed_in_this_round[i] += 1 # match up one Pauli X/Y/Z
 
-            for dice_roll_pauli in ["X", "Y", "Z"]:
+            for dice_roll_pauli in ['X', 'Y', 'Z']:
                 if min(cost_of_outcomes.values()) < cost_of_outcomes[dice_roll_pauli]:
                     continue
                 # The best dice roll outcome will come to this line
@@ -142,22 +143,22 @@ def derandomized_classical_shadow(all_observables, num_of_measurements_per_obser
 #
 # The following code is only used when we run this code through the command line interface
 #
-if __name__ == "__main__":
+if __name__ == '__main__':
     def print_usage():
-        print("Usage:\n", file=sys.stderr)
-        print("python3 data_acquisition_shadow -d [number of measurements per observable] [observable.txt]", file=sys.stderr)
-        print("    This is the derandomized version of classical shadow.", file=sys.stderr)
-        print("    We would output a list of Pauli measurements to measure all observables", file=sys.stderr)
-        print("    in [observable.txt] for at least [number of measurements per observable] times.", file=sys.stderr)
-        print("<or>\n", file=sys.stderr)
-        print("python3 data_acquisition_shadow -r [number of total measurements] [system size]", file=sys.stderr)
-        print("    This is the randomized version of classical shadow.", file=sys.stderr)
-        print("    We would output a list of Pauli measurements for the given [system size]", file=sys.stderr)
-        print("    with a total of [number of total measurements] repetitions.", file=sys.stderr)
+        print('Usage:\n', file=sys.stderr)
+        print('python3 data_acquisition_shadow -d [number of measurements per observable] [observable.txt]', file=sys.stderr)
+        print('    This is the derandomized version of classical shadow.', file=sys.stderr)
+        print('    We would output a list of Pauli measurements to measure all observables', file=sys.stderr)
+        print('    in [observable.txt] for at least [number of measurements per observable] times.', file=sys.stderr)
+        print('<or>\n', file=sys.stderr)
+        print('python3 data_acquisition_shadow -r [number of total measurements] [system size]', file=sys.stderr)
+        print('    This is the randomized version of classical shadow.', file=sys.stderr)
+        print('    We would output a list of Pauli measurements for the given [system size]', file=sys.stderr)
+        print('    with a total of [number of total measurements] repetitions.', file=sys.stderr)
 
     if len(sys.argv) != 4:
         print_usage()
-    if sys.argv[1] == "-d":
+    if sys.argv[1] == '-d':
         with open(sys.argv[3]) as f:
             content = f.readlines()
         system_size = int(content[0])
@@ -165,14 +166,14 @@ if __name__ == "__main__":
         all_observables = []
         for line in content[1:]:
             one_observable = []
-            for pauli_XYZ, position in zip(line.split(" ")[1::2], line.split(" ")[2::2]):
+            for pauli_XYZ, position in zip(line.split(' ')[1::2], line.split(' ')[2::2]):
                 one_observable.append((pauli_XYZ, int(position)))
             all_observables.append(one_observable)
         measurement_procedure = derandomized_classical_shadow(all_observables, int(sys.argv[2]), system_size)
-    elif sys.argv[1] == "-r":
+    elif sys.argv[1] == '-r':
         measurement_procedure = randomized_classical_shadow(int(sys.argv[2]), int(sys.argv[3]))
     else:
         print_usage()
 
     for single_round_measurement in measurement_procedure:
-        print(" ".join(single_round_measurement))
+        print(' '.join(single_round_measurement))

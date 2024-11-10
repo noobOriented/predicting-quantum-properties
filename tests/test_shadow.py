@@ -1,24 +1,16 @@
-import contextlib
-import io
-import runpy
-import sys
-from unittest.mock import patch
-
 import pytest
+from typer.testing import CliRunner
+
+import prediction_shadow
+
+
+runner = CliRunner()
 
 
 def test_shadow():
-    with (
-        patch.object(
-            sys, 'argv',
-            ['prediction_shadow.py', '-o', 'measurement.txt', 'observables.txt'],
-        ),
-        contextlib.redirect_stdout(io.StringIO()) as stream,
-    ):
-        runpy.run_module('prediction_shadow', run_name='__main__')
-    
-    stream.seek(0)
-    predictions = [float(line) for line in stream.readlines()]
+    result = runner.invoke(prediction_shadow.app, ['measurement.txt', 'observables.txt'])
+
+    predictions = [float(line) for line in result.stdout.splitlines()]
 
     assert predictions == pytest.approx(EXPECTED_PREDICTIONS)
 

@@ -1,21 +1,20 @@
-import sys
+import pathlib
+
+import typer
 
 
-def main():
-    def print_usage():
-        print('Usage:\n', file=sys.stderr)
-        print('./prediction_shadow -o [measurement.txt] [observable.txt]', file=sys.stderr)
-        print('    This option predicts the expectation of local observables.', file=sys.stderr)
-        print('    We would output the predicted value for each local observable given in [observable.txt]', file=sys.stderr)
+app = typer.Typer()
 
-    if len(sys.argv) != 4:
-        print_usage()
-        exit()
 
-    if sys.argv[1] != '-o':
-        raise NotImplementedError
-
-    with open(sys.argv[2]) as f:
+@app.command(
+    help='This option predicts the expectation of local observables.'
+        'We would output the predicted value for each local observable given in [observable.txt]'
+)
+def main(
+    measurement_path: pathlib.Path,
+    observable_path: pathlib.Path,
+):
+    with open(measurement_path) as f:
         system_size = int(f.readline())
         measurements = f.readlines()
 
@@ -27,7 +26,7 @@ def main():
         for line in measurements
     ]
 
-    with open(sys.argv[3]) as f:
+    with open(observable_path) as f:
         observable_size = int(f.readline())
         observables = f.readlines()
 
@@ -65,4 +64,4 @@ def estimate_exp(
 
 
 if __name__ == '__main__':
-    main()
+    app()
