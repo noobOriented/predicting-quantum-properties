@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "predicting-quantum-properties"
+version = "0.1.0"
+description = ""
+authors = [
+    "Hsin-Yuan Huang <momohuang@gmail.com>"
+]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.12"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
