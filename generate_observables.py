@@ -1,21 +1,34 @@
-observable_file = open('generated_observables.txt', 'w')
+import itertools
 
-system_size = 20
-print(system_size, file = observable_file)
+import typer
 
-for i in range(system_size - 1):
-    for j in range(system_size - 1):
-        if j == i or j == i + 1 or j+1 == i: continue
-        print('4 Y {} Y {} X {} X {}'.format(i, i+1, j, j+1), file = observable_file)
 
-for i in range(system_size - 1):
-    for j in range(system_size):
-        if j == i or j == i + 1: continue
+app = typer.Typer()
+
+
+@app.command()
+def main(system_size: int):
+    print(system_size)
+
+    for i, j in itertools.product(range(system_size - 1), range(system_size - 1)):
+        if j in (i - 1, i, i + 1):
+            continue
+        print(f'4 Y {i} Y {i + 1} X {j} X {j + 1}')
+
+    for i, j in itertools.product(range(system_size - 1), range(system_size)):
+        if j in (i, i + 1):
+            continue
+
         for j2 in range(system_size):
-            if j2 == i or j2 == i + 1 or j2 == j: continue
-            print('4 X {} X {} Z {} Z {}'.format(i, i+1, j, j2), file = observable_file)
+            if j2 in (i, i + 1, j):
+                continue
+            print(f'4 X {i} X {i + 1} Z {j} Z {j2}')
 
-for i in range(system_size - 1):
-    for j in range(system_size):
-        if j == i or j == i + 1: continue
-        print('3 X {} X {} Z {}'.format(i, i+1, j), file = observable_file)
+    for i, j in itertools.product(range(system_size - 1), range(system_size)):
+        if j in (i, i + 1):
+            continue
+        print(f'3 X {i} X {i + 1} Z {j}')
+
+
+if __name__ == '__main__':
+    app()
