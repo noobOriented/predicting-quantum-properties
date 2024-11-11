@@ -28,6 +28,11 @@ def test_prediction_shadow():
         SNAPSHOT_PATH / 'generated_observables_5.txt',
         SNAPSHOT_PATH / 'data_acquisition_shadow_d_m10_system_size5.txt',
     ),
+    (
+        20,
+        SNAPSHOT_PATH / 'generated_observables_10.txt',
+        SNAPSHOT_PATH / 'data_acquisition_shadow_d_m20_system_size10.txt',
+    ),
 ])
 def test_data_acquisition_shadow(
     measurements_per_observable,
@@ -42,6 +47,7 @@ def test_data_acquisition_shadow(
 
 @pytest.mark.parametrize('system_size, expected_result', [
     (5, SNAPSHOT_PATH / 'generated_observables_5.txt'),
+    (10, SNAPSHOT_PATH / 'generated_observables_10.txt'),
     (20, SNAPSHOT_PATH / 'generated_observables_20.txt'),
 ])
 def test_generate_observables(system_size, expected_result):
