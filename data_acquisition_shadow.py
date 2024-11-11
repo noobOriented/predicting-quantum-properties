@@ -5,6 +5,7 @@
 # This Python version is slower than the C++ version. (there are less code optimization)
 # But it should be easier to understand and build upon.
 #
+import decimal
 import enum
 import math
 import pathlib
@@ -54,10 +55,10 @@ def derandomized_classical_shadow_command(
     with open(observable_file) as f:
         system_size = int(f.readline())
         all_observables = [
-            [
-                (t.cast(PauliOp, pauli_XYZ), int(position))
+            {
+                int(position): pauli_XYZ
                 for pauli_XYZ, position in more_itertools.chunked(line.split()[1:], 2)
-            ]
+            }
             for line in f
         ]
 
@@ -67,10 +68,10 @@ def derandomized_classical_shadow_command(
 
 
 def derandomized_classical_shadow(
-    all_observables: list[list[tuple[PauliOp, int]]],
+    all_observables: t.Sequence[t.Mapping[int, PauliOp]],
     num_of_measurements_per_observable: int,
     system_size: int,
-    weight: list[float] | None = None,
+    weight: t.Sequence[float] | None = None,
 ) -> list[list[PauliOp]]:
     #
     # Implementation of the derandomized classical shadow
@@ -88,9 +89,6 @@ def derandomized_classical_shadow(
     elif len(weight) != len(all_observables):
         raise ValueError
 
-    sum_log_value = 0
-    sum_cnt = 0
-
     def cost_function(
         num_of_measurements_so_far: list[int],
         num_of_matches_needed_in_this_round: list[int],
@@ -100,9 +98,7 @@ def derandomized_classical_shadow(
     ):
         nu = 1 - math.exp(-eta / 2)
 
-        nonlocal sum_log_value
-        nonlocal sum_cnt
-
+        log_values: list[float] = []
         cost = 0
         for i, (measurement_so_far, matches_needed) in enumerate(zip(
             num_of_measurements_so_far,
@@ -111,25 +107,24 @@ def derandomized_classical_shadow(
             if num_of_measurements_so_far[i] >= math.floor(weight[i] * num_of_measurements_per_observable):
                 continue
 
-            V = (
-                eta / 2 * measurement_so_far
-                - (0 if system_size < matches_needed else math.log(1 - nu / (3 ** matches_needed)))
-            )
-            cost += math.exp(-V / weight[i] - shift)
+            v = eta / 2 * measurement_so_far
+            if system_size >= matches_needed:
+                v -= math.log(1 - nu / (3 ** matches_needed))
 
-            sum_log_value += V / weight[i]
-            sum_cnt += 1
+            cost += math.exp(-v / weight[i] - shift)
+            log_values.append(v / weight[i])
 
-        return cost
+        return cost, log_values
 
-    def match_up(qubit_i: int, dice_roll_pauli: PauliOp, ob: t.Iterable[tuple[PauliOp, int]], /):
-        target_pauli = next((pauli for pauli, pos in ob if pos == qubit_i), None)
+    def match_up(qubit_i: int, dice_roll_pauli: PauliOp, ob: t.Mapping[int, PauliOp], /) -> int:
+        target_pauli = ob.get(qubit_i)
         if target_pauli is None:
-            return MatchResult.NOT_FOUND
+            return 0
         if target_pauli == dice_roll_pauli:
-            return MatchResult.FOUND
-        return MatchResult.INCONSISTENT
+            return 1
+        return -100 * (system_size + 10)  # impossible to measure
 
+    shift = 0
     num_of_measurements_so_far = [0] * len(all_observables)
     measurement_procedure: list[list[PauliOp]] = []
 
@@ -138,60 +133,57 @@ def derandomized_classical_shadow(
         num_of_matches_needed_in_this_round = [len(P) for P in all_observables]
         single_round_measurement: list[PauliOp] = []
 
-        shift = sum_log_value / sum_cnt if sum_cnt > 0 else 0
-        sum_log_value = 0.0
-        sum_cnt = 0
+        total_log_values: list[float] = []
 
         for qubit_i in range(system_size):
             cost_of_outcomes = dict.fromkeys(PAULI_OPS, 0.)
 
-            for dice_roll_pauli in PAULI_OPS:
+            for pauli in PAULI_OPS:
                 # Assume the dice rollout to be "dice_roll_pauli"
                 for i, ob in enumerate(all_observables):
-                    result = match_up(qubit_i, dice_roll_pauli, ob)
-                    if result == MatchResult.INCONSISTENT:
-                        num_of_matches_needed_in_this_round[i] += 100 * (system_size + 10) # impossible to measure
-                    if result == MatchResult.FOUND:
-                        num_of_matches_needed_in_this_round[i] -= 1 # match up one Pauli X/Y/Z
+                    num_of_matches_needed_in_this_round[i] -= match_up(qubit_i, pauli, ob)
 
-                cost_of_outcomes[dice_roll_pauli] = cost_function(num_of_measurements_so_far, num_of_matches_needed_in_this_round, shift=shift)
+                cost, log_values = cost_function(num_of_measurements_so_far, num_of_matches_needed_in_this_round, shift=shift)
+                cost_of_outcomes[pauli] = cost
+                total_log_values += log_values
 
                 # Revert the dice roll
                 for i, ob in enumerate(all_observables):
-                    result = match_up(qubit_i, dice_roll_pauli, ob)
-                    if result == MatchResult.INCONSISTENT:
-                        num_of_matches_needed_in_this_round[i] -= 100 * (system_size + 10) # impossible to measure
-                    if result == MatchResult.FOUND:
-                        num_of_matches_needed_in_this_round[i] += 1 # match up one Pauli X/Y/Z
+                    num_of_matches_needed_in_this_round[i] += match_up(qubit_i, pauli, ob)
 
-            for dice_roll_pauli in PAULI_OPS:
-                if min(cost_of_outcomes.values()) < cost_of_outcomes[dice_roll_pauli]:
+            for pauli in PAULI_OPS:
+                if min(cost_of_outcomes.values()) < cost_of_outcomes[pauli]:
                     continue
+
                 # The best dice roll outcome will come to this line
-                single_round_measurement.append(dice_roll_pauli)
+                single_round_measurement.append(pauli)
                 for i, ob in enumerate(all_observables):
-                    result = match_up(qubit_i, dice_roll_pauli, ob)
-                    if result == MatchResult.INCONSISTENT:
-                        num_of_matches_needed_in_this_round[i] += 100 * (system_size+10) # impossible to measure
-                    if result == MatchResult.FOUND:
-                        num_of_matches_needed_in_this_round[i] -= 1 # match up one Pauli X/Y/Z
+                    num_of_matches_needed_in_this_round[i] -= match_up(qubit_i, pauli, ob)
                 break
 
+        shift = alt_sum(total_log_values) / len(total_log_values) if total_log_values else 0
         measurement_procedure.append(single_round_measurement)
 
-        for i, ob in enumerate(all_observables):
+        for i, _ in enumerate(all_observables):
             if num_of_matches_needed_in_this_round[i] == 0: # finished measuring all qubits
                 num_of_measurements_so_far[i] += 1
 
         success = sum(
             1
-            for i, single_observable in enumerate(all_observables)
+            for i, _ in enumerate(all_observables)
             if num_of_measurements_so_far[i] >= math.floor(weight[i] * num_of_measurements_per_observable)
         )
         if success == len(all_observables):
             break
 
     return measurement_procedure
+
+
+def alt_sum(it: t.Iterable[float]) -> float:  # FIXME not equivalent to sum(log_values) due to rounding
+    s = 0.0
+    for v in it:
+        s += v
+    return s
 
 
 if __name__ == '__main__':
