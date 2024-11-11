@@ -5,7 +5,6 @@
 # This Python version is slower than the C++ version. (there are less code optimization)
 # But it should be easier to understand and build upon.
 #
-import enum
 import math
 import pathlib
 import random
@@ -20,11 +19,6 @@ app = typer.Typer()
 
 PauliOp = t.Literal['X', 'Y', 'Z']
 PAULI_OPS: list[PauliOp] = ['X', 'Y', 'Z']
-
-class MatchResult(enum.IntEnum):
-    NOT_FOUND = 0
-    INCONSISTENT = -1
-    FOUND = 1
 
 
 @app.command(
@@ -53,7 +47,7 @@ def derandomized_classical_shadow_command(
 ):
     with open(observable_file) as f:
         system_size = int(f.readline())
-        all_observables = [
+        all_observables: list[dict[int, PauliOp]] = [
             {
                 int(position): pauli_XYZ
                 for pauli_XYZ, position in more_itertools.chunked(line.split()[1:], 2)
@@ -71,7 +65,7 @@ def derandomized_classical_shadow(
     num_of_measurements_per_observable: int,
     system_size: int,
     weight: t.Sequence[float] | None = None,
-) -> list[list[PauliOp]]:
+) -> t.Iterator[list[PauliOp]]:
     #
     # Implementation of the derandomized classical shadow
     #
@@ -89,36 +83,31 @@ def derandomized_classical_shadow(
         raise ValueError
 
     def cost_function(
-        num_of_measurements_so_far: list[int],
-        num_of_matches_needed_in_this_round: list[int],
+        num_of_measurements_so_far: t.Sequence[int],
+        num_of_matches_in_this_round: t.Sequence[int],
         /, *,
-        shift: float = 0,
         eta: float = 0.9,  # a hyperparameter subject to change
-    ):
+    ) -> t.Iterator[float]:
         nu = 1 - math.exp(-eta / 2)
 
-        cost = 0
-        log_values: list[float] = []
-        for measurement_so_far, matches_needed, w in zip(
+        for measurement_so_far, matches, w, ob in zip(
             num_of_measurements_so_far,
-            num_of_matches_needed_in_this_round,
+            num_of_matches_in_this_round,
             weight,
+            all_observables,
         ):
             if measurement_so_far >= math.floor(w * num_of_measurements_per_observable):
                 continue
 
-            v = eta / 2 * measurement_so_far
+            v = measurement_so_far * eta / 2
+            matches_needed = len(ob) - matches
             if system_size >= matches_needed:
                 v -= math.log(1 - nu / (3 ** matches_needed))
+            yield v / w
 
-            cost += math.exp(-v / w - shift)
-            log_values.append(v / w)
-
-        return cost, log_values
-
-    def match_up(qubit_i: int, dice_roll_pauli: PauliOp, ob: t.Mapping[int, PauliOp], /) -> int:
-        target_pauli = ob.get(qubit_i)
-        if target_pauli is None:
+    def match_up(pos: int, dice_roll_pauli: PauliOp, ob: t.Mapping[int, PauliOp], /) -> int:
+        target_pauli = ob.get(pos)
+        if not target_pauli:
             return 0
         if target_pauli == dice_roll_pauli:
             return 1
@@ -126,25 +115,25 @@ def derandomized_classical_shadow(
 
     shift = 0
     num_of_measurements_so_far = [0] * len(all_observables)
-    measurement_procedure: list[list[PauliOp]] = []
 
     for _ in range(num_of_measurements_per_observable * len(all_observables)):
         # A single round of parallel measurement over "system_size" number of qubits
-        num_of_matches_needed_in_this_round = [len(P) for P in all_observables]
+        num_of_matches_in_this_round = [0] * len(all_observables)
         single_round_measurement: list[PauliOp] = []
         total_log_values: list[float] = []
 
-        for qubit_i in range(system_size):
+        for pos in range(system_size):
             # for each qubit, picks the best pauli op & trace all log values to update shift
             best_cost = float('inf')
 
             for pauli in PAULI_OPS:
                 # Assume the dice rollout to be "dice_roll_pauli"
                 attempt = [
-                    x - match_up(qubit_i, pauli, ob)
-                    for x, ob in zip(num_of_matches_needed_in_this_round, all_observables)
+                    x + match_up(pos, pauli, ob)
+                    for x, ob in zip(num_of_matches_in_this_round, all_observables)
                 ]
-                cost, log_values = cost_function(num_of_measurements_so_far, attempt, shift=shift)
+                log_values = list(cost_function(num_of_measurements_so_far, attempt))
+                cost = altsum(math.exp(-lv - shift) for lv in log_values)
                 if cost < best_cost:
                     best_cost = cost
                     best_sol = attempt
@@ -153,12 +142,12 @@ def derandomized_classical_shadow(
                 total_log_values += log_values
 
             single_round_measurement.append(best_pauli)
-            num_of_matches_needed_in_this_round[:] = best_sol
+            num_of_matches_in_this_round[:] = best_sol
 
-        measurement_procedure.append(single_round_measurement)
+        yield single_round_measurement
 
-        for i, needed_i in enumerate(num_of_matches_needed_in_this_round):
-            if needed_i == 0: # finished measuring all qubits
+        for i, (match, ob) in enumerate(zip(num_of_matches_in_this_round, all_observables)):
+            if match == len(ob): # finished measuring all qubits
                 num_of_measurements_so_far[i] += 1
 
         success = sum(
@@ -167,21 +156,23 @@ def derandomized_classical_shadow(
             if num_of_measurements_so_far[i] >= math.floor(weight[i] * num_of_measurements_per_observable)
         )
         if success == len(all_observables):
-            break
+            return
 
         shift = compute_mean(total_log_values, 0)
-
-    return measurement_procedure
 
 
 def compute_mean(seq: t.Sequence[float], default=0) -> float:
     if not seq:
         return default
 
+    return altsum(seq) / len(seq)  # FIXME not equivalent to sum(log_values) due to rounding
+
+
+def altsum(seq: t.Iterable[float]) -> float:
     x = 0.0  # FIXME not equivalent to sum(log_values) due to rounding
     for v in seq:
         x += v
-    return x / len(seq)
+    return x
 
 
 if __name__ == '__main__':
