@@ -17,6 +17,7 @@ import random
 import typing as t
 
 import more_itertools
+import numpy as np
 import typer
 
 
@@ -102,11 +103,11 @@ def derandomized_classical_shadow(
         nu = 1 - math.exp(-eta / 2)
 
         for i in needed_to_measure:
-            v = num_of_measurements_so_far[i] * eta / 2
             matches_needed = len(observables[i]) - num_of_matches_in_this_round[i]
-            if matches_needed <= system_size:
-                v -= math.log(1 - nu / (3 ** matches_needed))
-
+            v = (
+                -num_of_measurements_so_far[i] * eta / 2
+                + (math.log(1 - nu / (3 ** matches_needed)) if matches_needed <= system_size else 0)
+            )
             yield v / weight[i]
 
     @functools.cache
@@ -148,9 +149,9 @@ def derandomized_classical_shadow(
                     i: num_of_matches_in_this_round[i] + dense_matchup(pos, pauli).get(i, 0)
                     for i in needed_to_measure
                 }
-                log_values = list(cost_function(attempt))  # cost of pos, pauli
-                total_log_values += log_values
-                cost = altsum(math.exp(-lv - shift) for lv in log_values)
+                logits = list(cost_function(attempt))  # cost of pos, pauli
+                total_log_values += logits
+                cost = compute_mean([math.exp(lv - shift) for lv in logits])
                 if cost < best_cost:
                     best_cost = cost
                     best_sol = attempt
