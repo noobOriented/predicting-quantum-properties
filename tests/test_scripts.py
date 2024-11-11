@@ -1,9 +1,4 @@
-import contextlib
-import io
 import pathlib
-import runpy
-import sys
-from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
@@ -39,14 +34,10 @@ def test_data_acquisition_shadow(
     observable_path,
     expected_result,
 ):
-    with (
-        patch.object(sys, 'argv', [data_acquisition_shadow.__name__, '-d', str(measurements_per_observable), str(observable_path)]),
-        contextlib.redirect_stdout(io.StringIO()) as stream,
-    ):
-        runpy.run_module(data_acquisition_shadow.__name__, run_name='__main__')
+    result = runner.invoke(data_acquisition_shadow.app, ['derandomized', str(measurements_per_observable), str(observable_path)])
 
     expected_result = open(expected_result).read()
-    assert stream.getvalue() == expected_result
+    assert result.stdout == expected_result
 
 
 @pytest.mark.parametrize('system_size, expected_result', [

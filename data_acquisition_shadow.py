@@ -6,24 +6,65 @@
 # But it should be easier to understand and build upon.
 #
 import math
+import pathlib
 import random
-import sys
+
+import more_itertools
+import typer
 
 
-def randomized_classical_shadow(num_total_measurements, system_size):
+app = typer.Typer()
+
+
+@app.command(
+    '-r',
+    help='This is the randomized version of classical shadow.'
+        'We would output a list of Pauli measurements for the given [system size]'
+        'with a total of [number of total measurements] repetitions.',
+)
+def randomized_classical_shadow(num_total_measurements: int, system_size: int):
     #
     # Implementation of the randomized classical shadow
     #
     #    num_total_measurements: int for the total number of measurement rounds
     #    system_size: int for how many qubits in the quantum system
     #
-    measurement_procedure = []
     for t in range(num_total_measurements):
         single_round_measurement = [random.choice(['X', 'Y', 'Z']) for i in range(system_size)]
-        measurement_procedure.append(single_round_measurement)
-    return measurement_procedure
+        print(' '.join(single_round_measurement))
 
-def derandomized_classical_shadow(all_observables, num_of_measurements_per_observable, system_size, weight=None):
+
+@app.command(
+    'derandomized',
+    help='This is the derandomized version of classical shadow.'
+        'We would output a list of Pauli measurements to measure all observables'
+        'in [observable.txt] for at least [number of measurements per observable] times.',
+)
+def derandomized_classical_shadow_command(
+    num_of_measurements_per_observable: int,
+    observable_file: pathlib.Path,
+):
+    with open(observable_file) as f:
+        system_size = int(f.readline())
+        all_observables = [
+            [
+                (pauli_XYZ, int(position))
+                for pauli_XYZ, position in more_itertools.chunked(line.split()[1:], 2)
+            ]
+            for line in f
+        ]
+
+    measurement_procedure = derandomized_classical_shadow(all_observables, num_of_measurements_per_observable, system_size)
+    for measurement in measurement_procedure:
+        print(' '.join(measurement))
+
+
+def derandomized_classical_shadow(
+    all_observables: list[list[tuple[str, int]]],
+    num_of_measurements_per_observable: int,
+    system_size: int,
+    weight=None,
+) -> list[list[str]]:
     #
     # Implementation of the derandomized classical shadow
     #
@@ -140,40 +181,6 @@ def derandomized_classical_shadow(all_observables, num_of_measurements_per_obser
 
     return measurement_procedure
 
-#
-# The following code is only used when we run this code through the command line interface
-#
+
 if __name__ == '__main__':
-    def print_usage():
-        print('Usage:\n', file=sys.stderr)
-        print('python3 data_acquisition_shadow -d [number of measurements per observable] [observable.txt]', file=sys.stderr)
-        print('    This is the derandomized version of classical shadow.', file=sys.stderr)
-        print('    We would output a list of Pauli measurements to measure all observables', file=sys.stderr)
-        print('    in [observable.txt] for at least [number of measurements per observable] times.', file=sys.stderr)
-        print('<or>\n', file=sys.stderr)
-        print('python3 data_acquisition_shadow -r [number of total measurements] [system size]', file=sys.stderr)
-        print('    This is the randomized version of classical shadow.', file=sys.stderr)
-        print('    We would output a list of Pauli measurements for the given [system size]', file=sys.stderr)
-        print('    with a total of [number of total measurements] repetitions.', file=sys.stderr)
-
-    if len(sys.argv) != 4:
-        print_usage()
-    if sys.argv[1] == '-d':
-        with open(sys.argv[3]) as f:
-            content = f.readlines()
-        system_size = int(content[0])
-
-        all_observables = []
-        for line in content[1:]:
-            one_observable = []
-            for pauli_XYZ, position in zip(line.split(' ')[1::2], line.split(' ')[2::2]):
-                one_observable.append((pauli_XYZ, int(position)))
-            all_observables.append(one_observable)
-        measurement_procedure = derandomized_classical_shadow(all_observables, int(sys.argv[2]), system_size)
-    elif sys.argv[1] == '-r':
-        measurement_procedure = randomized_classical_shadow(int(sys.argv[2]), int(sys.argv[3]))
-    else:
-        print_usage()
-
-    for single_round_measurement in measurement_procedure:
-        print(' '.join(single_round_measurement))
+    app()
