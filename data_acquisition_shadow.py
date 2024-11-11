@@ -6,8 +6,10 @@
 # But it should be easier to understand and build upon.
 #
 
+import collections
 import contextlib
 import cProfile
+import functools
 import math
 import pathlib
 import pstats
@@ -23,6 +25,7 @@ app = typer.Typer()
 
 PauliOp = t.Literal['X', 'Y', 'Z']
 PAULI_OPS: list[PauliOp] = ['X', 'Y', 'Z']
+Observable = t.Mapping[int, PauliOp]
 
 
 @app.command(
@@ -70,7 +73,7 @@ def derandomized_classical_shadow_command(
 
 
 def derandomized_classical_shadow(
-    all_observables: t.Sequence[t.Mapping[int, PauliOp]],
+    observables: t.Sequence[Observable],
     num_of_measurements_per_observable: int,
     system_size: int,
     weight: t.Sequence[float] | None = None,
@@ -87,12 +90,12 @@ def derandomized_classical_shadow(
     #             a list -- modify the number of measurements for each observable by the corresponding weight
     #
     if weight is None:
-        weight = [1.0] * len(all_observables)
-    elif len(weight) != len(all_observables):
+        weight = [1.0] * len(observables)
+    elif len(weight) != len(observables):
         raise ValueError
 
     def cost_function(
-        num_of_matches_in_this_round: t.Sequence[int],
+        num_of_matches_in_this_round: t.Mapping[int, int],
         /, *,
         eta: float = 0.9,  # a hyperparameter subject to change
     ):
@@ -100,27 +103,38 @@ def derandomized_classical_shadow(
 
         for i in needed_to_measure:
             v = num_of_measurements_so_far[i] * eta / 2
-            matches_needed = len(all_observables[i]) - num_of_matches_in_this_round[i]
+            matches_needed = len(observables[i]) - num_of_matches_in_this_round[i]
             if matches_needed <= system_size:
                 v -= math.log(1 - nu / (3 ** matches_needed))
 
             yield v / weight[i]
 
-    def match_up(pos: int, dice_roll_pauli: PauliOp, ob: t.Mapping[int, PauliOp], /) -> int:
-        target_pauli = ob.get(pos)
-        if not target_pauli:
-            return 0
-        if target_pauli == dice_roll_pauli:
-            return 1
-        return -100 * (system_size + 10)  # impossible to measure
+    @functools.cache
+    def get_column(pos: int) -> dict[int, PauliOp]:
+        return {
+            i: pauli
+            for i, ob in enumerate(observables)
+            if (pauli := ob.get(pos))
+        }
+
+    @functools.cache
+    def dense_matchup(pos: int, pauli: PauliOp, /):
+        # find observables which have op on pos
+        return {
+            i: match(pauli, target_pauli)
+            for i, target_pauli in get_column(pos).items()
+        }
+
+    def match(x: PauliOp, y: PauliOp):
+        return 1 if x == y else -100 * (system_size + 10)  # impossible to measure
 
     shift = 0
-    needed_to_measure = set(range(len(all_observables)))
-    num_of_measurements_so_far = [0] * len(all_observables)
+    needed_to_measure = set(range(len(observables)))
+    num_of_measurements_so_far = collections.defaultdict[int, int](int)
 
-    for _ in range(num_of_measurements_per_observable * len(all_observables)):
+    for _ in range(num_of_measurements_per_observable * len(observables)):
         # A single round of parallel measurement over "system_size" number of qubits
-        num_of_matches_in_this_round = [0] * len(all_observables)
+        num_of_matches_in_this_round = collections.defaultdict[int, int](int)
         single_round_measurement: list[PauliOp] = []
         total_log_values: list[float] = []
 
@@ -130,41 +144,33 @@ def derandomized_classical_shadow(
 
             for pauli in PAULI_OPS:
                 # Assume the dice rollout to be "dice_roll_pauli"
-                attempt = num_of_matches_in_this_round.copy()
-                for i in needed_to_measure:
-                    attempt[i] += match_up(pos, pauli, all_observables[i])
-
-                log_values = list(cost_function(attempt))
+                attempt = {
+                    i: num_of_matches_in_this_round[i] + dense_matchup(pos, pauli).get(i, 0)
+                    for i in needed_to_measure
+                }
+                log_values = list(cost_function(attempt))  # cost of pos, pauli
+                total_log_values += log_values
                 cost = altsum(math.exp(-lv - shift) for lv in log_values)
                 if cost < best_cost:
                     best_cost = cost
                     best_sol = attempt
                     best_pauli = pauli
 
-                total_log_values += log_values
-
             single_round_measurement.append(best_pauli)
             num_of_matches_in_this_round = best_sol
 
         yield single_round_measurement
 
-        for i in needed_to_measure:
-            match = num_of_matches_in_this_round[i]
-            ob = all_observables[i]
-            if match == len(ob): # finished measuring all qubits
+        # Update num_of_measurements_so_far
+        for i, matches in num_of_matches_in_this_round.items():
+            if matches == len(observables[i]):  # finished measuring all qubits
                 num_of_measurements_so_far[i] += 1
 
-        needed_to_measure -= {
-            i
-            for i in needed_to_measure
-            if num_of_measurements_so_far[i] >= math.floor(weight[i] * num_of_measurements_per_observable)
-        }
-        success = sum(
-            1
-            for m, w in zip(num_of_measurements_so_far, weight)
-            if m >= math.floor(w * num_of_measurements_per_observable)
-        )
-        if success == len(all_observables):
+        for i, measurements in num_of_measurements_so_far.items():
+            if measurements >= math.floor(weight[i] * num_of_measurements_per_observable):
+                needed_to_measure -= {i}
+
+        if not needed_to_measure:
             return
 
         shift = compute_mean(total_log_values, 0)
