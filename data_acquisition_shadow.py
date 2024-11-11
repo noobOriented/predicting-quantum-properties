@@ -5,8 +5,12 @@
 # This Python version is slower than the C++ version. (there are less code optimization)
 # But it should be easier to understand and build upon.
 #
+
+import contextlib
+import cProfile
 import math
 import pathlib
+import pstats
 import random
 import typing as t
 
@@ -44,20 +48,25 @@ def randomized_classical_shadow(
 def derandomized_classical_shadow_command(
     num_of_measurements_per_observable: int,
     observable_file: pathlib.Path,
+    profile: bool = False,
 ):
     with open(observable_file) as f:
         system_size = int(f.readline())
         all_observables: list[dict[int, PauliOp]] = [
             {
-                int(position): pauli_XYZ
+                int(position): t.cast(PauliOp, pauli_XYZ)
                 for pauli_XYZ, position in more_itertools.chunked(line.split()[1:], 2)
             }
             for line in f
         ]
 
-    measurement_procedure = derandomized_classical_shadow(all_observables, num_of_measurements_per_observable, system_size)
-    for measurement in measurement_procedure:
-        print(' '.join(measurement))
+    with (cProfile.Profile() if profile else contextlib.nullcontext()) as p:
+        measurement_procedure = derandomized_classical_shadow(all_observables, num_of_measurements_per_observable, system_size)
+        for measurement in measurement_procedure:
+            print(' '.join(measurement))
+    
+    if p:
+        pstats.Stats(p).sort_stats(pstats.SortKey.CUMULATIVE).print_stats(20)
 
 
 def derandomized_classical_shadow(
@@ -83,27 +92,19 @@ def derandomized_classical_shadow(
         raise ValueError
 
     def cost_function(
-        num_of_measurements_so_far: t.Sequence[int],
         num_of_matches_in_this_round: t.Sequence[int],
         /, *,
         eta: float = 0.9,  # a hyperparameter subject to change
-    ) -> t.Iterator[float]:
+    ):
         nu = 1 - math.exp(-eta / 2)
 
-        for measurement_so_far, matches, w, ob in zip(
-            num_of_measurements_so_far,
-            num_of_matches_in_this_round,
-            weight,
-            all_observables,
-        ):
-            if measurement_so_far >= math.floor(w * num_of_measurements_per_observable):
-                continue
-
-            v = measurement_so_far * eta / 2
-            matches_needed = len(ob) - matches
-            if system_size >= matches_needed:
+        for i in needed_to_measure:
+            v = num_of_measurements_so_far[i] * eta / 2
+            matches_needed = len(all_observables[i]) - num_of_matches_in_this_round[i]
+            if matches_needed <= system_size:
                 v -= math.log(1 - nu / (3 ** matches_needed))
-            yield v / w
+
+            yield v / weight[i]
 
     def match_up(pos: int, dice_roll_pauli: PauliOp, ob: t.Mapping[int, PauliOp], /) -> int:
         target_pauli = ob.get(pos)
@@ -114,6 +115,7 @@ def derandomized_classical_shadow(
         return -100 * (system_size + 10)  # impossible to measure
 
     shift = 0
+    needed_to_measure = set(range(len(all_observables)))
     num_of_measurements_so_far = [0] * len(all_observables)
 
     for _ in range(num_of_measurements_per_observable * len(all_observables)):
@@ -128,11 +130,11 @@ def derandomized_classical_shadow(
 
             for pauli in PAULI_OPS:
                 # Assume the dice rollout to be "dice_roll_pauli"
-                attempt = [
-                    x + match_up(pos, pauli, ob)
-                    for x, ob in zip(num_of_matches_in_this_round, all_observables)
-                ]
-                log_values = list(cost_function(num_of_measurements_so_far, attempt))
+                attempt = num_of_matches_in_this_round.copy()
+                for i in needed_to_measure:
+                    attempt[i] += match_up(pos, pauli, all_observables[i])
+
+                log_values = list(cost_function(attempt))
                 cost = altsum(math.exp(-lv - shift) for lv in log_values)
                 if cost < best_cost:
                     best_cost = cost
@@ -142,18 +144,25 @@ def derandomized_classical_shadow(
                 total_log_values += log_values
 
             single_round_measurement.append(best_pauli)
-            num_of_matches_in_this_round[:] = best_sol
+            num_of_matches_in_this_round = best_sol
 
         yield single_round_measurement
 
-        for i, (match, ob) in enumerate(zip(num_of_matches_in_this_round, all_observables)):
+        for i in needed_to_measure:
+            match = num_of_matches_in_this_round[i]
+            ob = all_observables[i]
             if match == len(ob): # finished measuring all qubits
                 num_of_measurements_so_far[i] += 1
 
+        needed_to_measure -= {
+            i
+            for i in needed_to_measure
+            if num_of_measurements_so_far[i] >= math.floor(weight[i] * num_of_measurements_per_observable)
+        }
         success = sum(
             1
-            for i, _ in enumerate(all_observables)
-            if num_of_measurements_so_far[i] >= math.floor(weight[i] * num_of_measurements_per_observable)
+            for m, w in zip(num_of_measurements_so_far, weight)
+            if m >= math.floor(w * num_of_measurements_per_observable)
         )
         if success == len(all_observables):
             return
