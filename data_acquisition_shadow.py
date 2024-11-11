@@ -9,7 +9,6 @@
 import collections
 import contextlib
 import cProfile
-import functools
 import math
 import pathlib
 import pstats
@@ -56,7 +55,7 @@ def derandomized_classical_shadow_command(
 ):
     with open(observable_file) as f:
         system_size = int(f.readline())
-        all_observables: list[dict[int, PauliOp]] = [
+        observables: list[Observable] = [
             {
                 int(position): t.cast(PauliOp, pauli_XYZ)
                 for pauli_XYZ, position in more_itertools.chunked(line.split()[1:], 2)
@@ -65,7 +64,7 @@ def derandomized_classical_shadow_command(
         ]
 
     with (cProfile.Profile() if profile else contextlib.nullcontext()) as p:
-        measurement_procedure = derandomized_classical_shadow(all_observables, num_of_measurements_per_observable, system_size)
+        measurement_procedure = derandomized_classical_shadow(observables, num_of_measurements_per_observable, system_size)
         for measurement in measurement_procedure:
             print(' '.join(measurement))
     
@@ -78,7 +77,7 @@ def derandomized_classical_shadow(
     num_of_measurements_per_observable: int,
     system_size: int,
     weight: t.Sequence[float] | None = None,
-) -> t.Iterator[list[PauliOp]]:
+):
     #
     # Implementation of the derandomized classical shadow
     #
@@ -95,39 +94,17 @@ def derandomized_classical_shadow(
     elif len(weight) != len(observables):
         raise ValueError
 
-    def cost_function(
-        num_of_matches_in_this_round: t.Mapping[int, int],
-        /, *,
-        eta: float = 0.9,  # a hyperparameter subject to change
-    ):
+    def cost_function(new_matches: t.Mapping[int, float]):
+        eta = 0.9  # a hyperparameter subject to change
         nu = 1 - math.exp(-eta / 2)
 
         for i in needed_to_measure:
-            matches_needed = len(observables[i]) - num_of_matches_in_this_round[i]
+            matches_needed = len(observables[i]) - new_matches[i]
             v = (
-                -num_of_measurements_so_far[i] * eta / 2
-                + (math.log(1 - nu / (3 ** matches_needed)) if matches_needed <= system_size else 0)
+                -num_of_measurements_so_far[i] * eta / 2  # const over qubit
+                + (math.log(1 - nu / (3 ** matches_needed)) if not math.isinf(matches_needed) else 0)
             )
-            yield v / weight[i]
-
-    @functools.cache
-    def get_column(pos: int) -> dict[int, PauliOp]:
-        return {
-            i: pauli
-            for i, ob in enumerate(observables)
-            if (pauli := ob.get(pos))
-        }
-
-    @functools.cache
-    def dense_matchup(pos: int, pauli: PauliOp, /):
-        # find observables which have op on pos
-        return {
-            i: match(pauli, target_pauli)
-            for i, target_pauli in get_column(pos).items()
-        }
-
-    def match(x: PauliOp, y: PauliOp):
-        return 1 if x == y else -100 * (system_size + 10)  # impossible to measure
+            yield v / weight[i] - shift
 
     shift = 0
     needed_to_measure = set(range(len(observables)))
@@ -137,58 +114,59 @@ def derandomized_classical_shadow(
         # A single round of parallel measurement over "system_size" number of qubits
         num_of_matches_in_this_round = collections.defaultdict[int, int](int)
         single_round_measurement: list[PauliOp] = []
-        total_log_values: list[float] = []
 
         for pos in range(system_size):
-            # for each qubit, picks the best pauli op & trace all log values to update shift
             best_cost = float('inf')
 
+            # for each qubit, picks the best measurement
             for pauli in PAULI_OPS:
                 # Assume the dice rollout to be "dice_roll_pauli"
-                attempt = {
-                    i: num_of_matches_in_this_round[i] + dense_matchup(pos, pauli).get(i, 0)
+                new_matches = {
+                    i: num_of_matches_in_this_round[i] + compute_match_score(pauli, observables[i].get(pos))
                     for i in needed_to_measure
                 }
-                logits = list(cost_function(attempt))  # cost of pos, pauli
-                total_log_values += logits
-                cost = compute_mean([math.exp(lv - shift) for lv in logits])
+                # logit decreases when num_of_matches_in_this_round increases
+                # add shift term to prevent float underflow
+                cost = np.mean(np.exp(np.asarray(list(cost_function(new_matches)))))
                 if cost < best_cost:
                     best_cost = cost
-                    best_sol = attempt
+                    best_sol = new_matches
                     best_pauli = pauli
 
+            shift = np.log(best_cost)
             single_round_measurement.append(best_pauli)
             num_of_matches_in_this_round = best_sol
 
         yield single_round_measurement
 
         # Update num_of_measurements_so_far
-        for i, matches in num_of_matches_in_this_round.items():
-            if matches == len(observables[i]):  # finished measuring all qubits
-                num_of_measurements_so_far[i] += 1
+        finished_qubits = [
+            i
+            for i, matches in num_of_matches_in_this_round.items()
+            if matches == len(observables[i])  # finished measuring all qubits
+        ]
+        if not finished_qubits:
+            raise RuntimeError('endless loop')
+        
+        for i in finished_qubits:
+            num_of_measurements_so_far[i] += 1
 
-        for i, measurements in num_of_measurements_so_far.items():
-            if measurements >= math.floor(weight[i] * num_of_measurements_per_observable):
-                needed_to_measure -= {i}
+        needed_to_measure -= {
+            i
+            for i, measurements in num_of_measurements_so_far.items()
+            if measurements >= weight[i] * num_of_measurements_per_observable
+        }
 
         if not needed_to_measure:
             return
 
-        shift = compute_mean(total_log_values, 0)
 
-
-def compute_mean(seq: t.Sequence[float], default=0) -> float:
-    if not seq:
-        return default
-
-    return altsum(seq) / len(seq)  # FIXME not equivalent to sum(log_values) due to rounding
-
-
-def altsum(seq: t.Iterable[float]) -> float:
-    x = 0.0  # FIXME not equivalent to sum(log_values) due to rounding
-    for v in seq:
-        x += v
-    return x
+def compute_match_score(a: PauliOp, b: PauliOp | None):
+    if b is None:
+        return 0
+    if a == b:
+        return 1
+    return float('-inf')  # FIXME
 
 
 if __name__ == '__main__':
