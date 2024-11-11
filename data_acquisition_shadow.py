@@ -5,7 +5,6 @@
 # This Python version is slower than the C++ version. (there are less code optimization)
 # But it should be easier to understand and build upon.
 #
-import decimal
 import enum
 import math
 import pathlib
@@ -93,26 +92,27 @@ def derandomized_classical_shadow(
         num_of_measurements_so_far: list[int],
         num_of_matches_needed_in_this_round: list[int],
         /, *,
-        shift: float = 0,  # a hyperparameter subject to change
-        eta: float = 0.9,
+        shift: float = 0,
+        eta: float = 0.9,  # a hyperparameter subject to change
     ):
         nu = 1 - math.exp(-eta / 2)
 
-        log_values: list[float] = []
         cost = 0
-        for i, (measurement_so_far, matches_needed) in enumerate(zip(
+        log_values: list[float] = []
+        for measurement_so_far, matches_needed, w in zip(
             num_of_measurements_so_far,
             num_of_matches_needed_in_this_round,
-        )):
-            if num_of_measurements_so_far[i] >= math.floor(weight[i] * num_of_measurements_per_observable):
+            weight,
+        ):
+            if measurement_so_far >= math.floor(w * num_of_measurements_per_observable):
                 continue
 
             v = eta / 2 * measurement_so_far
             if system_size >= matches_needed:
                 v -= math.log(1 - nu / (3 ** matches_needed))
 
-            cost += math.exp(-v / weight[i] - shift)
-            log_values.append(v / weight[i])
+            cost += math.exp(-v / w - shift)
+            log_values.append(v / w)
 
         return cost, log_values
 
@@ -132,40 +132,33 @@ def derandomized_classical_shadow(
         # A single round of parallel measurement over "system_size" number of qubits
         num_of_matches_needed_in_this_round = [len(P) for P in all_observables]
         single_round_measurement: list[PauliOp] = []
-
         total_log_values: list[float] = []
 
         for qubit_i in range(system_size):
-            cost_of_outcomes = dict.fromkeys(PAULI_OPS, 0.)
+            # for each qubit, picks the best pauli op & trace all log values to update shift
+            best_cost = float('inf')
 
             for pauli in PAULI_OPS:
                 # Assume the dice rollout to be "dice_roll_pauli"
-                for i, ob in enumerate(all_observables):
-                    num_of_matches_needed_in_this_round[i] -= match_up(qubit_i, pauli, ob)
+                attempt = [
+                    x - match_up(qubit_i, pauli, ob)
+                    for x, ob in zip(num_of_matches_needed_in_this_round, all_observables)
+                ]
+                cost, log_values = cost_function(num_of_measurements_so_far, attempt, shift=shift)
+                if cost < best_cost:
+                    best_cost = cost
+                    best_sol = attempt
+                    best_pauli = pauli
 
-                cost, log_values = cost_function(num_of_measurements_so_far, num_of_matches_needed_in_this_round, shift=shift)
-                cost_of_outcomes[pauli] = cost
                 total_log_values += log_values
 
-                # Revert the dice roll
-                for i, ob in enumerate(all_observables):
-                    num_of_matches_needed_in_this_round[i] += match_up(qubit_i, pauli, ob)
+            single_round_measurement.append(best_pauli)
+            num_of_matches_needed_in_this_round[:] = best_sol
 
-            for pauli in PAULI_OPS:
-                if min(cost_of_outcomes.values()) < cost_of_outcomes[pauli]:
-                    continue
-
-                # The best dice roll outcome will come to this line
-                single_round_measurement.append(pauli)
-                for i, ob in enumerate(all_observables):
-                    num_of_matches_needed_in_this_round[i] -= match_up(qubit_i, pauli, ob)
-                break
-
-        shift = alt_sum(total_log_values) / len(total_log_values) if total_log_values else 0
         measurement_procedure.append(single_round_measurement)
 
-        for i, _ in enumerate(all_observables):
-            if num_of_matches_needed_in_this_round[i] == 0: # finished measuring all qubits
+        for i, needed_i in enumerate(num_of_matches_needed_in_this_round):
+            if needed_i == 0: # finished measuring all qubits
                 num_of_measurements_so_far[i] += 1
 
         success = sum(
@@ -176,14 +169,19 @@ def derandomized_classical_shadow(
         if success == len(all_observables):
             break
 
+        shift = compute_mean(total_log_values, 0)
+
     return measurement_procedure
 
 
-def alt_sum(it: t.Iterable[float]) -> float:  # FIXME not equivalent to sum(log_values) due to rounding
-    s = 0.0
-    for v in it:
-        s += v
-    return s
+def compute_mean(seq: t.Sequence[float], default=0) -> float:
+    if not seq:
+        return default
+
+    x = 0.0  # FIXME not equivalent to sum(log_values) due to rounding
+    for v in seq:
+        x += v
+    return x / len(seq)
 
 
 if __name__ == '__main__':
