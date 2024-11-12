@@ -104,9 +104,8 @@ def derandomized_classical_shadow(
                 -num_of_measurements_so_far[i] * eta / 2  # const over qubit
                 + (math.log(1 - nu / (3 ** matches_needed)) if not math.isinf(matches_needed) else 0)
             )
-            yield v / weight[i] - shift
+            yield v / weight[i]
 
-    shift = 0
     needed_to_measure = set(range(len(observables)))
     num_of_measurements_so_far = collections.defaultdict[int, int](int)
 
@@ -125,15 +124,12 @@ def derandomized_classical_shadow(
                     i: num_of_matches_in_this_round[i] + compute_match_score(pauli, observables[i].get(pos))
                     for i in needed_to_measure
                 }
-                # logit decreases when num_of_matches_in_this_round increases
-                # add shift term to prevent float underflow
-                cost = np.mean(np.exp(np.asarray(list(cost_function(new_matches)))))
+                cost = logsumexp(list(cost_function(new_matches)))
                 if cost < best_cost:
                     best_cost = cost
                     best_sol = new_matches
                     best_pauli = pauli
 
-            shift = np.log(best_cost)
             single_round_measurement.append(best_pauli)
             num_of_matches_in_this_round = best_sol
 
@@ -167,6 +163,13 @@ def compute_match_score(a: PauliOp, b: PauliOp | None):
     if a == b:
         return 1
     return float('-inf')  # FIXME
+
+
+def logsumexp(logits):
+    logits = np.asarray(logits)
+    # To prevent overflow or underflow
+    shift = np.min(logits)
+    return np.log(np.sum(np.exp(logits - shift))) + shift
 
 
 if __name__ == '__main__':
