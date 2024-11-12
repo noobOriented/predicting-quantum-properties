@@ -314,8 +314,8 @@ X X X Z X X Y Y Y X
 X Z Y Y Y X X X X X
 X Z Y Z Z Z Z X X Z
 X Y Y X X Y Y X X X
-X X Z Z X X X X Z X
 X X Y Y X X X Y Y X
+X X Z Z X X X X Z X
 X X Z Z Z Z Z X X X
 X X X X X Z X Y Y X
 X X X X Z Z X X Z X
@@ -325,8 +325,8 @@ X X Y Y Z Z X X X X
 X X X X Z Z X Z X X
 X X X X Y Y X X Y Y
 X X X X Y Y X X Y Y
-X X X X X Y Y X X X
 X X X X X X X Y Y X
+X X X X X Y Y X X X
 X X X X X X X Y Y X
 X X X X X Y Y X X X
 X X X X X X Y Y X X

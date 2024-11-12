@@ -98,11 +98,15 @@ def derandomized_classical_shadow(
         eta = 0.9  # a hyperparameter subject to change
         nu = 1 - math.exp(-eta / 2)
 
-        for i in needed_to_measure:
-            matches_needed = len(observables[i]) - new_matches[i]
+        for i, m in new_matches.items():
+            matches_needed = len(observables[i]) - m  # decreate when more matches
             v = (
                 -num_of_measurements_so_far[i] * eta / 2  # const over qubit
-                + (math.log(1 - nu / (3 ** matches_needed)) if not math.isinf(matches_needed) else 0)
+                + (
+                    math.log(1 - nu / (3 ** matches_needed))  # decrease when more matches -> less cost
+                    if not math.isinf(matches_needed)
+                    else 0
+                )
             )
             yield v / weight[i]
 
@@ -118,20 +122,22 @@ def derandomized_classical_shadow(
             best_cost = float('inf')
 
             # for each qubit, picks the best measurement
-            for pauli in PAULI_OPS:
-                # Assume the dice rollout to be "dice_roll_pauli"
+            for op in PAULI_OPS:
                 new_matches = {
-                    i: num_of_matches_in_this_round[i] + compute_match_score(pauli, observables[i].get(pos))
+                    i: num_of_matches_in_this_round[i] + (1 if op == target_op else -math.inf)  # XXX can't be match
                     for i in needed_to_measure
+                    # When there's no match on (i, pos), i-th term is constant over different choice of `op`
+                    # thus ignore this i
+                    if (target_op := observables[i].get(pos))
                 }
                 cost = logsumexp(list(cost_function(new_matches)))
                 if cost < best_cost:
                     best_cost = cost
                     best_sol = new_matches
-                    best_pauli = pauli
+                    best_op = op
 
-            single_round_measurement.append(best_pauli)
-            num_of_matches_in_this_round = best_sol
+            single_round_measurement.append(best_op)
+            num_of_matches_in_this_round |= best_sol
 
         yield single_round_measurement
 
@@ -157,15 +163,9 @@ def derandomized_classical_shadow(
             return
 
 
-def compute_match_score(a: PauliOp, b: PauliOp | None):
-    if b is None:
-        return 0
-    if a == b:
-        return 1
-    return float('-inf')  # FIXME
-
-
 def logsumexp(logits):
+    if len(logits) == 0:
+        return 0
     logits = np.asarray(logits)
     # To prevent overflow or underflow
     shift = np.min(logits)
