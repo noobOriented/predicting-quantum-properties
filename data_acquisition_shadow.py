@@ -6,7 +6,6 @@
 # But it should be easier to understand and build upon.
 #
 
-import collections
 import contextlib
 import cProfile
 import functools
@@ -18,8 +17,8 @@ import typing as t
 
 import more_itertools
 import numpy as np
+import numpy.typing as npt
 import typer
-
 
 app = typer.Typer()
 
@@ -77,7 +76,8 @@ def derandomized_classical_shadow(
     observables: t.Sequence[Observable],
     num_of_measurements_per_observable: int,
     system_size: int,
-    weight: t.Sequence[float] | None = None,
+    weight: t.Sequence[float] | npt.NDArray | None = None,
+    eta: float = 0.9  # a hyperparameter subject to change,
 ):
     #
     # Implementation of the derandomized classical shadow
@@ -95,78 +95,69 @@ def derandomized_classical_shadow(
     elif len(weight) != len(observables):
         raise ValueError
 
-
-    def cost_function(new_matches: t.Mapping[int, float]):
-        eta = 0.9  # a hyperparameter subject to change
-        nu = 1 - math.exp(-eta / 2)
-        return [
-            (
-                -num_of_measurements_so_far[i] * eta / 2  # const over qubit
-                + math.log(1 - nu / (3 ** (len(observables[i]) - m)))   # decrease when more matches -> less cost
-            ) / weight[i]
-            for i, m in new_matches.items()
-        ]
-
-    needed_to_measure = set(range(len(observables)))
-    num_of_measurements_so_far = collections.defaultdict[int, int](int)
+    weight = np.asarray(weight)
+    len_obs = np.asarray([len(ob) for ob in observables])
+    needed_to_measure = set(range(len(observables)))  # TODO swapping?
+    num_of_measurements_so_far = np.zeros([len(observables)])
 
     @functools.cache
-    def observable_have_op_at_pos(pos: int):
+    def observables_have_op_at_pos(pos: int):
         return {i for i, ob in enumerate(observables) if ob.get(pos)}
 
     for _ in range(num_of_measurements_per_observable * len(observables)):
         # A single round of parallel measurement over "system_size" number of qubits
-        num_of_matches_in_this_round = collections.defaultdict[int, int](int)
+        num_of_matches_in_this_round = np.zeros([len(observables)])
         single_round_measurement: list[PauliOp] = []
 
         for pos in range(system_size):
-            best_cost = float('inf')
+            best_cost = np.inf
 
             # for each qubit, picks the best measurement
             for op in PAULI_OPS:
-                new_matches = {
-                    i: num_of_matches_in_this_round[i] + (1 if op == observables[i][pos] else -math.inf)  # XXX can't be match
-                    # When there's no match on (i, pos), i-th term is constant over different choice of `op`
-                    # thus ignore this i
-                    for i in needed_to_measure & observable_have_op_at_pos(pos)
-                }
-                cost = logsumexp(cost_function(new_matches))
+                # for observable have no `op` on `pos`, it contributes nothing to the cost, just ignore it
+                indices = np.asarray(
+                    list(needed_to_measure & observables_have_op_at_pos(pos)),
+                    dtype=np.uint,
+                )
+                new_matches = num_of_matches_in_this_round[indices] + [
+                    1 if op == observables[i][pos] else -np.inf
+                    for i in indices
+                ]  # TODO change observables to onehot?
+                nu = 1 - np.exp(-eta / 2)
+                matches_needed = len_obs[indices] - new_matches
+                logits = (
+                    -num_of_measurements_so_far[indices] * eta / 2
+                    + np.log(1 - nu / (np.pow(3, matches_needed)))  # decreases when more matches
+                ) / weight[indices]
+                cost = logsumexp(logits)
                 if cost < best_cost:  # TODO refactor to min(iterable)
                     best_cost = cost
-                    best_sol = new_matches
-                    best_op = op
+                    best_sol = (op, indices, new_matches)
 
-            single_round_measurement.append(best_op)
-            num_of_matches_in_this_round |= best_sol
+            op, indices, new_matches = best_sol
+            single_round_measurement.append(op)
+            num_of_matches_in_this_round[indices] = new_matches
 
         yield single_round_measurement
 
         # Update num_of_measurements_so_far
-        finished_qubits = [
-            i
-            for i, matches in num_of_matches_in_this_round.items()  # XXX some value will be -inf
-            if matches == len(observables[i])  # finished measuring all qubits
-        ]
-        if not finished_qubits:
+        finished_qubits = np.nonzero(
+            num_of_matches_in_this_round == len_obs  # finished measuring all qubits
+        )[0]
+        if len(finished_qubits) == 0:
             raise RuntimeError('endless loop')
-        
-        for i in finished_qubits:
-            num_of_measurements_so_far[i] += 1
 
-        needed_to_measure -= {
-            i
-            for i, measurements in num_of_measurements_so_far.items()
-            if measurements >= weight[i] * num_of_measurements_per_observable
-        }
-
+        num_of_measurements_so_far[finished_qubits] += 1
+        needed_to_measure.difference_update(np.nonzero(
+            num_of_measurements_so_far >= weight * num_of_measurements_per_observable
+        )[0])
         if not needed_to_measure:
             return
 
 
-def logsumexp(logits):
+def logsumexp(logits: npt.NDArray):
     if len(logits) == 0:
         return 0
-    logits = np.asarray(logits)
     # To prevent overflow or underflow
     shift = np.min(logits)
     return np.log(np.sum(np.exp(logits - shift))) + shift
