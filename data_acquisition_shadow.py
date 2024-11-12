@@ -9,6 +9,7 @@
 import collections
 import contextlib
 import cProfile
+import functools
 import math
 import pathlib
 import pstats
@@ -94,24 +95,24 @@ def derandomized_classical_shadow(
     elif len(weight) != len(observables):
         raise ValueError
 
+
     def cost_function(new_matches: t.Mapping[int, float]):
         eta = 0.9  # a hyperparameter subject to change
         nu = 1 - math.exp(-eta / 2)
-
-        for i, m in new_matches.items():
-            matches_needed = len(observables[i]) - m  # decreate when more matches
-            v = (
+        return [
+            (
                 -num_of_measurements_so_far[i] * eta / 2  # const over qubit
-                + (
-                    math.log(1 - nu / (3 ** matches_needed))  # decrease when more matches -> less cost
-                    if not math.isinf(matches_needed)
-                    else 0
-                )
-            )
-            yield v / weight[i]
+                + math.log(1 - nu / (3 ** (len(observables[i]) - m)))   # decrease when more matches -> less cost
+            ) / weight[i]
+            for i, m in new_matches.items()
+        ]
 
     needed_to_measure = set(range(len(observables)))
     num_of_measurements_so_far = collections.defaultdict[int, int](int)
+
+    @functools.cache
+    def observable_have_op_at_pos(pos: int):
+        return {i for i, ob in enumerate(observables) if ob.get(pos)}
 
     for _ in range(num_of_measurements_per_observable * len(observables)):
         # A single round of parallel measurement over "system_size" number of qubits
@@ -124,14 +125,13 @@ def derandomized_classical_shadow(
             # for each qubit, picks the best measurement
             for op in PAULI_OPS:
                 new_matches = {
-                    i: num_of_matches_in_this_round[i] + (1 if op == target_op else -math.inf)  # XXX can't be match
-                    for i in needed_to_measure
+                    i: num_of_matches_in_this_round[i] + (1 if op == observables[i][pos] else -math.inf)  # XXX can't be match
                     # When there's no match on (i, pos), i-th term is constant over different choice of `op`
                     # thus ignore this i
-                    if (target_op := observables[i].get(pos))
+                    for i in needed_to_measure & observable_have_op_at_pos(pos)
                 }
-                cost = logsumexp(list(cost_function(new_matches)))
-                if cost < best_cost:
+                cost = logsumexp(cost_function(new_matches))
+                if cost < best_cost:  # TODO refactor to min(iterable)
                     best_cost = cost
                     best_sol = new_matches
                     best_op = op
@@ -144,7 +144,7 @@ def derandomized_classical_shadow(
         # Update num_of_measurements_so_far
         finished_qubits = [
             i
-            for i, matches in num_of_matches_in_this_round.items()
+            for i, matches in num_of_matches_in_this_round.items()  # XXX some value will be -inf
             if matches == len(observables[i])  # finished measuring all qubits
         ]
         if not finished_qubits:
