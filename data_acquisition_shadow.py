@@ -8,8 +8,6 @@
 
 import contextlib
 import cProfile
-import functools
-import math
 import pathlib
 import pstats
 import random
@@ -20,11 +18,13 @@ import numpy as np
 import numpy.typing as npt
 import typer
 
+
 app = typer.Typer()
 
 
 PauliOp = t.Literal['X', 'Y', 'Z']
 PAULI_OPS: list[PauliOp] = ['X', 'Y', 'Z']
+PAULI_TO_INT: t.Mapping[PauliOp, int] = {'X': 1, 'Y': 2, 'Z': 3}
 Observable = t.Mapping[int, PauliOp]
 
 
@@ -67,7 +67,7 @@ def derandomized_classical_shadow_command(
         measurement_procedure = derandomized_classical_shadow(observables, num_of_measurements_per_observable, system_size)
         for measurement in measurement_procedure:
             print(' '.join(measurement))
-    
+
     if p:
         pstats.Stats(p).sort_stats(pstats.SortKey.CUMULATIVE).print_stats(20)
 
@@ -95,18 +95,19 @@ def derandomized_classical_shadow(
     elif len(weight) != len(observables):
         raise ValueError
 
+    dense_observables = np.zeros([len(observables), system_size], dtype=np.uint8)
+    for i, ob in enumerate(observables):
+        for pos, pauli in ob.items():
+            dense_observables[i, pos] = PAULI_TO_INT[pauli]
+
     weight = np.asarray(weight)
     len_obs = np.asarray([len(ob) for ob in observables])
-    needed_to_measure = set(range(len(observables)))  # TODO swapping?
+    needed_to_measure = np.ones([len(observables)], dtype=bool)
     num_of_measurements_so_far = np.zeros([len(observables)])
-
-    @functools.cache
-    def observables_have_op_at_pos(pos: int):
-        return {i for i, ob in enumerate(observables) if ob.get(pos)}
 
     for _ in range(num_of_measurements_per_observable * len(observables)):
         # A single round of parallel measurement over "system_size" number of qubits
-        num_of_matches_in_this_round = np.zeros([len(observables)])
+        matches_in_this_round = np.zeros([len(observables)])
         single_round_measurement: list[PauliOp] = []
 
         for pos in range(system_size):
@@ -115,14 +116,12 @@ def derandomized_classical_shadow(
             # for each qubit, picks the best measurement
             for op in PAULI_OPS:
                 # for observable have no `op` on `pos`, it contributes nothing to the cost, just ignore it
-                indices = np.asarray(
-                    list(needed_to_measure & observables_have_op_at_pos(pos)),
-                    dtype=np.uint,
+                indices = np.nonzero(needed_to_measure & (dense_observables[:, pos] != 0))[0]
+                new_matches = matches_in_this_round[indices] + np.where(
+                    dense_observables[indices, pos] == PAULI_TO_INT[op],
+                    1,
+                    -np.inf,
                 )
-                new_matches = num_of_matches_in_this_round[indices] + [
-                    1 if op == observables[i][pos] else -np.inf
-                    for i in indices
-                ]  # TODO change observables to onehot?
                 nu = 1 - np.exp(-eta / 2)
                 matches_needed = len_obs[indices] - new_matches
                 logits = (
@@ -136,22 +135,20 @@ def derandomized_classical_shadow(
 
             op, indices, new_matches = best_sol
             single_round_measurement.append(op)
-            num_of_matches_in_this_round[indices] = new_matches
+            matches_in_this_round[indices] = new_matches
 
         yield single_round_measurement
 
         # Update num_of_measurements_so_far
         finished_qubits = np.nonzero(
-            num_of_matches_in_this_round == len_obs  # finished measuring all qubits
+            matches_in_this_round == len_obs  # finished measuring all qubits
         )[0]
         if len(finished_qubits) == 0:
             raise RuntimeError('endless loop')
 
         num_of_measurements_so_far[finished_qubits] += 1
-        needed_to_measure.difference_update(np.nonzero(
-            num_of_measurements_so_far >= weight * num_of_measurements_per_observable
-        )[0])
-        if not needed_to_measure:
+        needed_to_measure[num_of_measurements_so_far >= weight * num_of_measurements_per_observable] = False
+        if not needed_to_measure.any():
             return
 
 
