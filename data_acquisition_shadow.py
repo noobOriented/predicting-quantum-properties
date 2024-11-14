@@ -95,46 +95,41 @@ def derandomized_classical_shadow(
     elif len(weight) != len(observables):
         raise ValueError
 
+    weight = np.asarray(weight)
+
     dense_observables = np.zeros([len(observables), system_size], dtype=np.uint8)
     for i, ob in enumerate(observables):
         for pos, pauli in ob.items():
             dense_observables[i, pos] = PAULI_TO_INT[pauli]
 
-    weight = np.asarray(weight)
-    len_obs = np.asarray([len(ob) for ob in observables])
-    num_of_measurements_so_far = np.zeros([len(observables)])
+    len_obs = np.sum(dense_observables != 0, axis=1)
+    num_of_measurements_so_far = np.zeros([len(dense_observables)])
+    nu = 1 - np.exp(-eta / 2)
 
     for _ in range(num_of_measurements_per_observable * len(observables)):
         # A single round of parallel measurement over "system_size" number of qubits
-        matches_in_this_round = np.zeros([len(dense_observables)])
+        matches_in_this_round = np.zeros([len(dense_observables)])  # shape (N, )
         single_round_measurement: list[PauliOp] = []
 
         for pos in range(system_size):
-            best_cost = np.inf
+            # find best op for each qubit
+            indices = np.nonzero(dense_observables[:, pos])[0]  # shape (M, )
+            diff_matches = np.where(
+                dense_observables[indices, pos, np.newaxis] == np.arange(1, 4),
+                1,
+                -np.inf,
+            )  # shape (M, 3)
+            new_matches = matches_in_this_round[indices, np.newaxis] + diff_matches  # shape (M, 3)
+            matches_needed = len_obs[indices, np.newaxis] - new_matches
+            logits = (
+                -num_of_measurements_so_far[indices, np.newaxis] * eta / 2
+                + np.log(1 - nu / np.pow(3, matches_needed))
+            ) / weight[indices, np.newaxis]  # shape (M, 3)
+            cost = logsumexp(logits, axis=0)  # (3,)
 
-            # for each qubit, picks the best measurement
-            for op in PAULI_OPS:
-                # for observable have no `op` on `pos`, it contributes nothing to the cost, just ignore it
-                indices = np.nonzero(dense_observables[:, pos] != 0)[0]
-                new_matches = matches_in_this_round[indices] + np.where(
-                    dense_observables[indices, pos] == PAULI_TO_INT[op],
-                    1,
-                    -np.inf,
-                )
-                nu = 1 - np.exp(-eta / 2)
-                matches_needed = len_obs[indices] - new_matches
-                logits = (
-                     -num_of_measurements_so_far[indices] * eta / 2
-                    + np.log(1 - nu / np.pow(3, matches_needed))  # decreases when more matches
-                ) / weight[indices]
-                cost = logsumexp(logits)
-                if cost < best_cost:  # TODO refactor to min(iterable)
-                    best_cost = cost
-                    best_sol = (op, indices, new_matches)
-
-            op, indices, new_matches = best_sol
-            single_round_measurement.append(op)
-            matches_in_this_round[indices] = new_matches
+            op_idx = np.argmin(cost)  # scalar in [0, 3)
+            matches_in_this_round[indices] = new_matches[:, op_idx]
+            single_round_measurement.append(PAULI_OPS[op_idx])
 
         yield single_round_measurement
 
@@ -154,16 +149,12 @@ def derandomized_classical_shadow(
         weight = weight[keep_indices]
 
 
-def logsumexp(logits: npt.NDArray):
-    if len(logits) == 0:
+def logsumexp(logits: npt.NDArray, axis=None):
+    if logits.size == 0:
         return 0
     # To prevent overflow or underflow
-    shift = np.min(logits)
-    return np.log(np.sum(np.exp(logits - shift))) + shift
-
-
-def take_unordered(arr, indices):
-    ...
+    shift = np.max(logits, axis=axis, keepdims=True)
+    return np.log(np.sum(np.exp(logits - shift), axis=axis)) + shift
 
 
 if __name__ == '__main__':
