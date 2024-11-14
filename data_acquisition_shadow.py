@@ -102,12 +102,11 @@ def derandomized_classical_shadow(
 
     weight = np.asarray(weight)
     len_obs = np.asarray([len(ob) for ob in observables])
-    needed_to_measure = np.ones([len(observables)], dtype=bool)
     num_of_measurements_so_far = np.zeros([len(observables)])
 
     for _ in range(num_of_measurements_per_observable * len(observables)):
         # A single round of parallel measurement over "system_size" number of qubits
-        matches_in_this_round = np.zeros([len(observables)])
+        matches_in_this_round = np.zeros([len(dense_observables)])
         single_round_measurement: list[PauliOp] = []
 
         for pos in range(system_size):
@@ -116,7 +115,7 @@ def derandomized_classical_shadow(
             # for each qubit, picks the best measurement
             for op in PAULI_OPS:
                 # for observable have no `op` on `pos`, it contributes nothing to the cost, just ignore it
-                indices = np.nonzero(needed_to_measure & (dense_observables[:, pos] != 0))[0]
+                indices = np.nonzero(dense_observables[:, pos] != 0)[0]
                 new_matches = matches_in_this_round[indices] + np.where(
                     dense_observables[indices, pos] == PAULI_TO_INT[op],
                     1,
@@ -125,8 +124,8 @@ def derandomized_classical_shadow(
                 nu = 1 - np.exp(-eta / 2)
                 matches_needed = len_obs[indices] - new_matches
                 logits = (
-                    -num_of_measurements_so_far[indices] * eta / 2
-                    + np.log(1 - nu / (np.pow(3, matches_needed)))  # decreases when more matches
+                     -num_of_measurements_so_far[indices] * eta / 2
+                    + np.log(1 - nu / np.pow(3, matches_needed))  # decreases when more matches
                 ) / weight[indices]
                 cost = logsumexp(logits)
                 if cost < best_cost:  # TODO refactor to min(iterable)
@@ -140,16 +139,19 @@ def derandomized_classical_shadow(
         yield single_round_measurement
 
         # Update num_of_measurements_so_far
-        finished_qubits = np.nonzero(
-            matches_in_this_round == len_obs  # finished measuring all qubits
-        )[0]
+        finished_qubits = np.nonzero(matches_in_this_round == len_obs)[0]
         if len(finished_qubits) == 0:
             raise RuntimeError('endless loop')
 
         num_of_measurements_so_far[finished_qubits] += 1
-        needed_to_measure[num_of_measurements_so_far >= weight * num_of_measurements_per_observable] = False
-        if not needed_to_measure.any():
+        keep_indices = np.nonzero(num_of_measurements_so_far < weight * num_of_measurements_per_observable)[0]
+        if len(keep_indices) == 0:
             return
+
+        num_of_measurements_so_far = num_of_measurements_so_far[keep_indices]
+        dense_observables = dense_observables[keep_indices]
+        len_obs = len_obs[keep_indices]
+        weight = weight[keep_indices]
 
 
 def logsumexp(logits: npt.NDArray):
@@ -158,6 +160,10 @@ def logsumexp(logits: npt.NDArray):
     # To prevent overflow or underflow
     shift = np.min(logits)
     return np.log(np.sum(np.exp(logits - shift))) + shift
+
+
+def take_unordered(arr, indices):
+    ...
 
 
 if __name__ == '__main__':
