@@ -109,26 +109,31 @@ def derandomized_classical_shadow(
     for _ in range(num_of_measurements_per_observable * len(observables)):
         # A single round of parallel measurement over "system_size" number of qubits
         matches_in_this_round = np.zeros([len(dense_observables)])  # shape (N, )
+        noninf_mask = np.ones([len(dense_observables)], dtype=bool)
         single_round_measurement: list[PauliOp] = []
 
+        # find best op for each qubit
         for pos in range(system_size):
-            # find best op for each qubit
-            indices = np.nonzero(dense_observables[:, pos])[0]  # shape (M, )
+            # When dense_observables[i, pos] == 0, it's contribution to cost is constant across different pauli op
+            # Thus can be ignored
+            indices = np.nonzero((dense_observables[:, pos] != 0) & noninf_mask)[0]  # shape (M, )
             diff_matches = np.where(
-                dense_observables[indices, pos, np.newaxis] == np.arange(1, 4),
+                dense_observables[indices, pos] == np.arange(1, 4)[:, np.newaxis],
                 1,
                 -np.inf,
-            )  # shape (M, 3)
-            new_matches = matches_in_this_round[indices, np.newaxis] + diff_matches  # shape (M, 3)
-            matches_needed = len_obs[indices, np.newaxis] - new_matches
+            )  # shape (3, M)
+            new_matches = matches_in_this_round[indices] + diff_matches  # shape (3, M)
+            matches_needed = len_obs[indices] - new_matches
             logits = (
-                -num_of_measurements_so_far[indices, np.newaxis] * eta / 2
+                -num_of_measurements_so_far[indices] * eta / 2
                 + np.log(1 - nu / np.pow(3, matches_needed))
-            ) / weight[indices, np.newaxis]  # shape (M, 3)
-            cost = logsumexp(logits, axis=0)  # (3,)
+            ) / weight[indices]  # shape (3, M)
+            cost = logsumexp(logits, axis=1)  # (3,)
 
             op_idx = np.argmin(cost)  # scalar in [0, 3)
-            matches_in_this_round[indices] = new_matches[:, op_idx]
+            matches_in_this_round[indices] = new_matches[op_idx]
+            # once matches_in_this_round[i] becomes inf, logits never change in the rest of pos
+            noninf_mask[np.isinf(matches_in_this_round)] = False
             single_round_measurement.append(PAULI_OPS[op_idx])
 
         yield single_round_measurement
@@ -154,7 +159,7 @@ def logsumexp(logits: npt.NDArray, axis=None):
         return 0
     # To prevent overflow or underflow
     shift = np.max(logits, axis=axis, keepdims=True)
-    return np.log(np.sum(np.exp(logits - shift), axis=axis)) + shift
+    return np.log(np.sum(np.exp(logits - shift), axis=axis)) + np.squeeze(shift, axis)
 
 
 if __name__ == '__main__':
