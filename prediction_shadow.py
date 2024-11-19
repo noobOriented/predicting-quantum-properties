@@ -1,52 +1,70 @@
-import sys
+import math
+import pathlib
+import typing as t
 
-def estimate_exp(full_measurement, one_observable):
+import more_itertools
+import typer
+
+
+app = typer.Typer()
+PauliOp = t.Literal['X', 'Y', 'Z']
+
+
+@app.command(
+    help='This option predicts the expectation of local observables.'
+        'We would output the predicted value for each local observable given in [observable.txt]'
+)
+def main(
+    measurement_path: pathlib.Path,
+    observable_path: pathlib.Path,
+):
+    with open(measurement_path) as f:
+        system_size = int(f.readline())
+        full_measurement = [
+            [
+                (t.cast(PauliOp, pauli_XYZ), int(outcome))
+                for pauli_XYZ, outcome in more_itertools.chunked(line.split(), 2)
+            ]
+            for line in f
+        ]
+
+    with open(observable_path) as f:
+        observable_size = int(f.readline())
+        observables = [
+            [
+                (t.cast(PauliOp, pauli_XYZ), int(position))
+                for pauli_XYZ, position in more_itertools.chunked(line.split()[1:], 2)
+            ]
+            for line in f
+        ]
+
+    for one_observable in observables:
+        sum_product, cnt_match = estimate_exp(full_measurement, one_observable)
+        print(sum_product / cnt_match)
+
+
+def estimate_exp(
+    full_measurement: list[list[tuple[PauliOp, int]]],
+    one_observable: list[tuple[PauliOp, int]],
+) -> tuple[int, int]:
     sum_product, cnt_match = 0, 0
 
     for single_measurement in full_measurement:
-        not_match = 0
-        product = 1
+        if not all(
+            pauli_XYZ == single_measurement[position][0]
+            for pauli_XYZ, position in one_observable
+        ):
+            continue
 
-        for pauli_XYZ, position in one_observable:
-            if pauli_XYZ != single_measurement[position][0]:
-                not_match = 1
-                break
-            product *= single_measurement[position][1]
-        if not_match == 1: continue
-
+        product = math.prod(
+            single_measurement[position][1]
+            for _, position in one_observable
+        )
         sum_product += product
         cnt_match += 1
 
     return sum_product, cnt_match
 
-if __name__ == "__main__":
-    def print_usage():
-        print("Usage:\n", file=sys.stderr)
-        print("./prediction_shadow -o [measurement.txt] [observable.txt]", file=sys.stderr)
-        print("    This option predicts the expectation of local observables.", file=sys.stderr)
-        print("    We would output the predicted value for each local observable given in [observable.txt]", file=sys.stderr)
 
-    if len(sys.argv) != 4:
-        print_usage()
-
-    with open(sys.argv[2]) as f:
-        measurements = f.readlines()
-    system_size = int(measurements[0])
-
-    full_measurement = []
-    for line in measurements[1:]:
-        single_meaurement = []
-        for pauli_XYZ, outcome in zip(line.split(" ")[0::2], line.split(" ")[1::2]):
-            single_meaurement.append((pauli_XYZ, int(outcome)))
-        full_measurement.append(single_meaurement)
-
-    with open(sys.argv[3]) as f:
-        content = f.readlines()
-    assert(system_size == int(content[0]))
-
-    for line in content[1:]:
-        one_observable = []
-        for pauli_XYZ, position in zip(line.split(" ")[1::2], line.split(" ")[2::2]):
-            one_observable.append((pauli_XYZ, int(position)))
-        sum_product, cnt_match = estimate_exp(full_measurement, one_observable)
-        print(sum_product / cnt_match)
+if __name__ == '__main__':
+    app()

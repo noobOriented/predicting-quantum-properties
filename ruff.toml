@@ -1,0 +1,13 @@
+line-length = 119
+
+[lint]
+select = ["E", "F", "I", "C", "N", "S"]
+
+[lint.per-file-ignores]
+"*test*.py" = ["S101"]
+
+[lint.flake8-quotes]
+inline-quotes = "single"
+
+[lint.isort]
+lines-after-imports = 2
