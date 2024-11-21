@@ -63,29 +63,24 @@ def derandomized_classical_shadow_command(
 
 
 def _parse_observables(path):
-    def parse_line(line: str):
-        dense_out = np.zeros(system_size, dtype=np.uint8)
-        for op, position in more_itertools.chunked(line.split()[1:], 2):
-            dense_out[int(position)] = PAULI_TO_INT[op]
-        return dense_out
-
     with open(path) as f:
         system_size = int(f.readline())
-        return np.stack([parse_line(line) for line in f])
+        lines = f.readlines()
+    
+    out = np.zeros((len(lines), system_size), dtype=np.uint8)
+    for line, row in zip(lines, out):
+        line = line.split()
+        indices = [int(s) for s in line[2::2]]
+        values = [PAULI_TO_INT[s] for s in line[1::2]]
+        row[indices] = values
+
+    return out
 
 
 def derandomized_classical_shadow(
     observables: npt.NDArray[np.uint],  # (N, Q)
     num_of_measurements_per_observable: int,
-    weight: t.Sequence[float] | npt.NDArray | None = None,
 ):
-    if weight is None:
-        weight = np.ones(len(observables))
-    elif len(weight) == len(observables):
-        weight = np.asarray(weight)
-    else:
-        raise ValueError
-
     observable_counts = np.count_nonzero(observables, axis=1)
     num_of_measurements = np.zeros([len(observables)])
 
@@ -93,7 +88,6 @@ def derandomized_classical_shadow(
         measurement, finished_qubits = fit_measurement(
             num_of_measurements,
             observables,
-            weight,
             observable_counts,
         )
         if len(finished_qubits) == 0:
@@ -102,20 +96,18 @@ def derandomized_classical_shadow(
         yield measurement
 
         num_of_measurements[finished_qubits] += 1
-        keep_indices, = np.nonzero(num_of_measurements < weight * num_of_measurements_per_observable)
+        keep_indices, = np.nonzero(num_of_measurements < num_of_measurements_per_observable)
         if len(keep_indices) == 0:
             return
 
         num_of_measurements = num_of_measurements[keep_indices]
         observables = observables[keep_indices]
         observable_counts = observable_counts[keep_indices]
-        weight = weight[keep_indices]
 
 
 def fit_measurement(
     n_measurements: npt.NDArray,  # (N,)
     observables: npt.NDArray,  # shape (N, Q), value in [0, 4)
-    weight: npt.NDArray,  # (N,)
     observable_counts: npt.NDArray | None = None,
 ):
     if observable_counts is None:
@@ -138,7 +130,6 @@ def fit_measurement(
         cost = cost_func(
             n_measurements[indices],  # shape (M,)
             observable_counts[indices] - new_matches,  # shape (3, M)
-            weight[indices],  # shape (M,)
         )
 
         op_idx = np.argmin(cost)  # scalar in [0, 3)
@@ -153,24 +144,11 @@ def fit_measurement(
 def cost_func(
     n_measurements: npt.NDArray,  # shape (N,)
     matches_needed: npt.NDArray,  # shape (3, N)
-    weights: npt.NDArray,  # shape (N,)
     *,
     eta: float = 0.9,
-) -> npt.NDArray:
+) -> npt.NDArray:  # shape (3,)
     nu = 1 - np.exp(-eta / 2)
-    logits = (
-        -n_measurements * eta / 2
-        + np.log(1 - nu / np.pow(3, matches_needed))
-    ) / weights  # shape (3, N)
-    return logsumexp(logits, axis=1)  # (3,)
-
-
-def logsumexp(logits: npt.NDArray, axis=None):
-    if logits.size == 0:
-        return np.sum(np.full_like(logits, -np.inf), axis)
-    # To prevent overflow or underflow
-    shift = np.max(logits)
-    return np.log(np.sum(np.exp(logits - shift), axis=axis)) + shift
+    return (1 - nu / (3 ** matches_needed)) @ np.exp(-n_measurements * (eta / 2))
 
 
 if __name__ == '__main__':
