@@ -39,7 +39,13 @@ def test_data_acquisition_shadow(
     observable_path,
     expected_result,
 ):
-    result = runner.invoke(data_acquisition_shadow.app, ['derandomized', str(measurements_per_observable), str(observable_path)])
+    result = runner.invoke(
+        data_acquisition_shadow.app,
+        f'derandomized {measurements_per_observable} {observable_path}',
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
 
     expected_result = open(expected_result).read()
     assert result.stdout == expected_result
