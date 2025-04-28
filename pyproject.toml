@@ -1,4 +1,4 @@
-[tool.poetry]
+[project]
 name = "predicting-quantum-properties"
 version = "0.1.0"
 description = ""
@@ -6,19 +6,15 @@ authors = [
     "Hsin-Yuan Huang <momohuang@gmail.com>"
 ]
 readme = "README.md"
-package-mode = false
+python-requires = ">=3.12"
+dependencies = [
+    "typer >=0.13.0",
+    "more-itertools >=10.5.0",
+    "numpy >=2.1.3"
+]
 
-[tool.poetry.dependencies]
-python = "^3.12"
-typer = "^0.13.0"
-more-itertools = "^10.5.0"
-numpy = "^2.1.3"
-
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.3.3"
-ruff = "^0.7.3"
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+[dependency-groups]
+dev = [
+    "pytest >=8.3.3",
+    "ruff >=0.11",
+]
